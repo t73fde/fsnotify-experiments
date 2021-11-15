@@ -12,10 +12,17 @@ import (
 
 // Notifier send events about their container and content.
 type Notifier interface {
-	Events() chan NotifyEvent
+	// Return the channel
+	Events() <-chan NotifyEvent
+
+	// Signal a reload of the container. This will result in some events.
+	Reload()
+
+	// Close the notifier (and eventually the channel)
 	Close()
 }
 
+// NotifyEventOp describe a notification operation.
 type NotifyEventOp uint8
 
 const (
@@ -28,6 +35,7 @@ const (
 	Delete                // Delete element
 )
 
+// String representation of operation code.
 func (c NotifyEventOp) String() string {
 	switch c {
 	case Error:
@@ -47,13 +55,14 @@ func (c NotifyEventOp) String() string {
 	}
 }
 
+// NotifyEvent represents a single container / element event.
 type NotifyEvent struct {
 	Op   NotifyEventOp
 	Name string
-	Err  error
+	Err  error // Valid iff Op == Error
 }
 
-type DirNotifier struct {
+type dirNotifier struct {
 	events chan NotifyEvent
 	done   chan struct{}
 	base   *fsnotify.Watcher
@@ -61,7 +70,7 @@ type DirNotifier struct {
 	dir    string
 }
 
-func (w *DirNotifier) Events() chan NotifyEvent { return w.events }
+// NewDirNotifier creates a directory based notifier.
 func NewDirNotifier(path string) (Notifier, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -78,7 +87,7 @@ func NewDirNotifier(path string) (Notifier, error) {
 		return nil, err
 	}
 	watcher.Add(absPath) // Not a problem, if container is not available. It might become available later.
-	w := &DirNotifier{
+	w := &dirNotifier{
 		events: make(chan NotifyEvent),
 		done:   make(chan struct{}),
 		base:   watcher,
@@ -89,24 +98,29 @@ func NewDirNotifier(path string) (Notifier, error) {
 	return w, nil
 }
 
-func (w *DirNotifier) Close() {
+func (w *dirNotifier) Events() <-chan NotifyEvent {
+	return w.events
+}
+
+func (w *dirNotifier) Reload() {
+	go w.listElements()
+}
+
+func (w *dirNotifier) Close() {
 	close(w.done)
 }
 
-func (w *DirNotifier) readEvents() {
+func (w *dirNotifier) readEvents() {
 	defer w.base.Close()
 	defer close(w.events)
 	if !w.listElements() {
 		return
 	}
-	for {
-		if !w.readEvent() {
-			return
-		}
+	for w.readEvent() {
 	}
 }
 
-func (w *DirNotifier) readEvent() bool {
+func (w *dirNotifier) readEvent() bool {
 	select {
 	case <-w.done:
 		return false
@@ -135,7 +149,7 @@ func (w *DirNotifier) readEvent() bool {
 	return true
 }
 
-func (w *DirNotifier) processEvent(ev *fsnotify.Event) bool {
+func (w *dirNotifier) processEvent(ev *fsnotify.Event) bool {
 	if strings.HasPrefix(ev.Name, w.path) {
 		if len(ev.Name) == len(w.path) {
 			return w.processDirEvent(ev)
@@ -148,7 +162,7 @@ func (w *DirNotifier) processEvent(ev *fsnotify.Event) bool {
 const deleteOps = fsnotify.Remove | fsnotify.Rename
 const updateOps = fsnotify.Create | fsnotify.Write
 
-func (w *DirNotifier) processDirEvent(ev *fsnotify.Event) bool {
+func (w *dirNotifier) processDirEvent(ev *fsnotify.Event) bool {
 	if ev.Op&deleteOps != 0 {
 		w.base.Remove(w.path)
 		select {
@@ -172,7 +186,7 @@ func (w *DirNotifier) processDirEvent(ev *fsnotify.Event) bool {
 	return true
 }
 
-func (w *DirNotifier) processFileEvent(ev *fsnotify.Event) bool {
+func (w *dirNotifier) processFileEvent(ev *fsnotify.Event) bool {
 	if ev.Op&deleteOps != 0 {
 		select {
 		case w.events <- NotifyEvent{Op: Delete, Name: filepath.Base(ev.Name)}:
@@ -194,7 +208,7 @@ func (w *DirNotifier) processFileEvent(ev *fsnotify.Event) bool {
 	return true
 }
 
-func (w *DirNotifier) listElements() bool {
+func (w *dirNotifier) listElements() bool {
 	select {
 	case w.events <- NotifyEvent{Op: Make}:
 	case <-w.done:
@@ -242,5 +256,12 @@ func main() {
 			log.Println(event.Op, event.Err, event.Name)
 		}
 	}()
+	// go func() {
+	// 	for {
+	// 		time.Sleep(10 * time.Second)
+	// 		log.Println("RELOAD")
+	// 		notifier.Reload()
+	// 	}
+	// }()
 	<-done
 }
