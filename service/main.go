@@ -2,13 +2,12 @@ package main
 
 import (
 	"log"
+	"time"
 )
 
 func main() {
-	path := "/tmp/fsnotify"
-	notifier, err := NewDirNotifier(path)
+	notifier, err := NewDirNotifier("/tmp/fsnotify")
 	if err != nil {
-		log.Println("HAE")
 		log.Fatal(err)
 	}
 	defer notifier.Close()
@@ -19,12 +18,12 @@ func main() {
 			log.Println(event.Op, event.Err, event.Name)
 		}
 	}()
-	// go func() {
-	// 	for {
-	// 		time.Sleep(10 * time.Second)
-	// 		log.Println("RELOAD")
-	// 		notifier.Reload()
-	// 	}
-	// }()
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			log.Println("RELOAD")
+			notifier.Reload()
+		}
+	}()
 	<-done
 }

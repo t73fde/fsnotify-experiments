@@ -11,6 +11,7 @@ import (
 type dirNotifier struct {
 	events chan NotifyEvent
 	done   chan struct{}
+	reload chan struct{}
 	base   *fsnotify.Watcher
 	path   string
 	dir    string
@@ -35,6 +36,7 @@ func NewDirNotifier(path string) (Notifier, error) {
 	watcher.Add(absPath) // Not a problem, if container is not available. It might become available later.
 	w := &dirNotifier{
 		events: make(chan NotifyEvent),
+		reload: make(chan struct{}),
 		done:   make(chan struct{}),
 		base:   watcher,
 		path:   absPath,
@@ -49,7 +51,7 @@ func (w *dirNotifier) Events() <-chan NotifyEvent {
 }
 
 func (w *dirNotifier) Reload() {
-	go w.listElements()
+	w.reload <- struct{}{}
 }
 
 func (w *dirNotifier) Close() {
@@ -59,6 +61,7 @@ func (w *dirNotifier) Close() {
 func (w *dirNotifier) readEvents() {
 	defer w.base.Close()
 	defer close(w.events)
+	defer close(w.reload)
 	if !w.listElements() {
 		return
 	}
@@ -75,6 +78,8 @@ func (w *dirNotifier) readEvent() bool {
 	select {
 	case <-w.done:
 		return false
+	case <-w.reload:
+		w.listElements()
 	case err, ok := <-w.base.Errors:
 		if !ok {
 			return false
